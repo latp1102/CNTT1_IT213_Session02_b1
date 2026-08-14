@@ -1,0 +1,73 @@
+BÀI 2: TÍNH TOÁN - CƠ CHẾ TOKENIZATION & CONTEXT WINDOW
+
+1. TOKENIZATION LÀ GÌ? VÌ SAO TIẾNG VIỆT TỐN NHIỀU TOKEN HƠN TIẾNG ANH?
+
+Tokenization là quá trình tách văn bản thành các đơn vị nhỏ gọi là token (từ,
+phân-từ subword, hoặc ký tự). LLM không hiểu chữ/ký tự trực tiếp: mỗi token được
+gán một ID số và chuyển thành embedding vector trước khi đưa vào mô hình. Token
+chính là "đơn vị đếm" trong Context Window và phí API.
+
+Các bộ Tokenizer phổ biến (Llama, Qwen) dùng BPE/WordPiece/SentencePiece: tách
+theo subword dựa trên tần suất xuất hiện trong kho dữ liệu huấn luyện (chủ yếu là
+Tiếng Anh). Vì vậy Tiếng Việt bất lợi hơn vì:
+
+- Dấu thanh (ế, ệ, ữ...) tạo ra rất nhiều tổ hợp ký tự hiếm, ít xuất hiện trong
+  kho dữ liệu Anh, nên thường bị tách thành 2-3 subword/token thay vì 1 token như
+  ký tự Latin thuần. Ví dụ "nguyệ" có thể thành ["nguy", "ệ"].
+- Từ Tiếng Việt thường dài, mang dấu, nên nếu bị tách nhỏ sẽ tốn nhiều token hơn.
+- Tiếng Anh phần lớn là token 1:1 cho từ thông dụng; Tiếng Việt nhiều khi phải
+  dùng 1.5-2.5 tokens cho cùng số từ, nên 8.000 từ VN ~ 12.000 tokens còn 8.000 từ
+  Anh chỉ ~10.500-11.000 tokens.
+
+2. CHUYỆN GÌ XẢY RA KHI GỬI TOÀN BỘ TÀI LIỆU + PROMPT?
+
+Tổng token đầu vào của request = 12.000 (tài liệu) + vài trăm token (prompt tóm
+tắt) + phần dự trữ cho kết quả tóm tắt (output) > 8.192 tokens (Context Window).
+
+Hiện tượng: Ollama KHÔNG thể xử lý toàn bộ input. Nó sẽ cắt bớt (truncate) phần
+vượt quá giới hạn, chỉ giữ lại ~8.192 token đầu tiên, và cảnh báo "input is
+longer than context window, truncating". Mô hình chỉ "thấy" khoảng 2/3 tài liệu.
+
+Hậu quả đối với chất lượng tóm tắt:
+- Bản tóm tắt THIẾU toàn bộ phần cuối tài liệu, không đầy đủ nội dung.
+- Mô hình thậm chí KHÔNG BIẾT mình bị cắt → output mạch lạc nhưng lại sai lệch,
+  thiếu thông tin quan trọng.
+- Lãng phí: phần tài liệu bị cắt vẫn tốn thời gian encode nhưng không được dùng.
+
+Nguyên nhân: Context Window là dung lượng token tối đa mà mô hình "nhớ" được trong
+một request (input + output). Vượt quá giới hạn, mô hình buộc phải hy sinh input
+để khớp kích thước, dẫn đến mất ngữ cảnh và kết quả kém.
+
+3. HAI GIẢI PHÁP KỸ THUẬT KHẮC PHỤC
+
+Giải pháp 1: Chunking & MapReduce (Tách nhỏ + Tóm tắt 2 cấp)
+- Chia tài liệu thành các chunk nhỏ (VD: 1.500-2.000 tokens, overlap 100-200
+  tokens để không mất ý giữa các đoạn).
+- Map: gửi từng chunk + prompt "tóm tắt đoạn này" lên Ollama → được các bản tóm
+  tắt trung gian.
+- Reduce: gửi toàn bộ các bản tóm tắt trung gian + prompt "tổng hợp thành bản tóm
+  tắt cuối" → bản tóm tắt hoàn chỉnh.
+- Kết quả: tóm tắt đầy đủ toàn bộ 8.000 từ, không bị cắt. Có thể dùng langchain4j
+  (splitter) hoặc tự viết logic chia nhỏ văn bản.
+
+Giải pháp 2: Cấu hình tăng Context Window qua Modelfile của Ollama
+- Tạo file Modelfile và tăng num_ctx:
+    FROM qwen2.5-coder:7b
+    PARAMETER num_ctx 32768
+  rồi chạy: ollama create qwen2.5-coder:ext -f Modelfile
+- Khi context window đủ lớn (>= 12.000 + prompt + output), Ollama xử lý được toàn
+  bộ tài liệu trong một request, không cần thay đổi mã nguồn.
+- Lưu ý nhược điểm: tăng num_ctx làm tốn bộ nhớ GPU (dung lượng KV-cache tăng đáng
+  kể) và thời gian suy luận dài hơn; cần kiểm tra VRAM máy (7B thường cần 6-8GB).
+- Nên tính: num_ctx >= input + output (dự trù ~14.000-16.000 tokens).
+
+(Giải pháp bổ sung nếu cần: RAG - chia chunk, sinh embedding, lưu vector DB, chỉ
+truy vấn những chunk liên quan rồi tóm tắt, giúp tiết kiệm token hơn nữa.)
+
+KẾT LUẬN
+- Tiếng Việt tốn nhiều token hơn Tiếng Anh do dấu thanh và corpus huấn luyện đa
+  số là Tiếng Anh.
+- Với 12.000 tokens > context 8.192, Ollama sẽ truncate input → tóm tắt thiếu và
+  sai lệch.
+- Khắc phục bằng Chunking + MapReduce hoặc tăng num_ctx trong Modelfile (hoặc kết
+  hợp RAG) để hoàn thành mục tiêu tóm tắt.

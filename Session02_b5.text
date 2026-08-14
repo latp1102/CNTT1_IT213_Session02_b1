@@ -1,0 +1,97 @@
+BÀI 5: KIẾN TRÚC & CODE - THIẾT KẾ LOOSELY COUPLED
+
+1. LỚP FeedbackAnalysisService (JAVA HOÀN CHỈNH)
+
+package com.example.crm.service;
+
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.stereotype.Service;
+
+@Service
+public class FeedbackAnalysisService {
+
+    private final ChatModel chatModel;
+
+    public FeedbackAnalysisService(ChatModel chatModel) {
+        this.chatModel = chatModel;
+    }
+
+    public String analyzeFeedback(String feedbackText) {
+        String prompt = "Bạn là chuyên viên phân tích CSKH. Hãy phân tích ý kiến "
+                + "khách hàng sau và trả về nhận xét ngắn gọn:\n" + feedbackText;
+
+        ChatResponse response = chatModel.call(new Prompt(prompt));
+        return response.getResult().getOutput().getText();
+    }
+}
+
+2. VÌ SAO INJECT ChatModel THỂ HIỆN LOOSELY COUPLED?
+   (LẬP TRÌNH HƯỚNG GIAO DIỆN - PROGRAMMING TO INTERFACE)
+
+- ChatModel là interface trừu tượng hóa mọi nhà cung cấp LLM (OllamaChatModel,
+  OpenAiChatModel đều implement nó).
+- Service chỉ phụ thuộc vào "khái niệm gọi model" (interface) chứ không phụ thuộc
+  vào "cách gọi cụ thể" (implementation):
+    + Service không import, không new OllamaChatModel/OpenAiChatModel.
+    + Mọi model đổi chỉ là đổi bean được inject, code nghiệp vụ bên trong không đổi.
+- Nhờ đó: đổi từ Ollama local sang OpenRouter/Gemini chỉ cần đổi profile/properties,
+  không sửa bất kỳ dòng nào của FeedbackAnalysisService -> đúng nguyên lý Loosely
+  Coupled, dễ test (mock ChatModel) và dễ mở rộng.
+
+3. GIẢI QUYẾT LỖI TRÙNG BEAN (AMBIGUOUS BEAN) KHI NẠP CẢ 2 STARTER
+
+Vì có cả 2 dependency starter, Spring Boot tạo 2 bean: OllamaChatModel và
+OpenAiChatModel. Khi inject ChatModel vào service, Spring không biết chọn bean nào
+-> lỗi "expected single matching bean but found 2". Giải quyết bằng 2 cách:
+
+CÁCH 1 (ĐỀ XUẤT, KHÔNG CẦN SỬA CODE): dùng spring.ai.model.chat
+- Thêm vào application-local.properties:
+    spring.ai.model.chat=ollama
+- Thêm vào application-cloud.properties:
+    spring.ai.model.chat=openai
+- Spring AI đọc key này để đánh dấu đúng bean tương ứng là @Primary (bean chính),
+  các bean còn lại vẫn tồn tại nhưng không được ưu tiên -> không còn lỗi trùng.
+
+CÁCH 2 (BẰNG ANNOTATION @Profile + @Primary): cấu hình tách theo profile
+- Tạo 2 class config, mỗi class chỉ active ở đúng 1 profile:
+
+@Configuration
+@Profile("local")
+public class LocalModelConfig {
+
+    @Bean
+    @Primary
+    public ChatModel ollamaChatModel() {
+        return new OllamaChatModel(OllamaApi.builder()
+                .baseUrl("http://localhost:11434")
+                .build());
+    }
+}
+
+@Configuration
+@Profile("cloud")
+public class CloudModelConfig {
+
+    @Bean
+    @Primary
+    public ChatModel openAiChatModel() {
+        return OpenAiChatModel.builder()
+                .openAiApi(OpenAiApi.builder()
+                        .apiKey(System.getenv("OPENROUTER_API_KEY"))
+                        .baseUrl("https://openrouter.ai/api/v1")
+                        .build())
+                .build();
+    }
+}
+
+- Khi active profile "local", chỉ bean Ollama được dựng; khi active "cloud", chỉ
+  OpenAi bean được dựng -> luôn chỉ có 1 candidate cho ChatModel, không trùng.
+- @Primary dùng để phòng trường hợp một profile có nhiều bean ChatModel, luôn ưu
+  tiên đúng bean ta muốn.
+
+KHUYẾN NGHỊ
+- Dùng CÁCH 1 (spring.ai.model.chat) cho đơn giản, không cần sửa code Java.
+- Giữ CÁCH 2 khi cần cấu hình model theo lập trình (login, retry, stream...) mà
+  properties không làm được.

@@ -1,0 +1,65 @@
+BÀI 1: PHÂN TÍCH & LỰA CHỌN - CẤU HÌNH ĐA MÔI TRƯỜNG (SPRING PROFILES)
+
+ĐÁP ÁN TỐI ƯU: PHƯƠNG ÁN B
+
+1. LÝ DO CHỌN PHƯƠNG ÁN B (DỰA TRÊN CƠ CHẾ SPRING PROFILES)
+
+- Đúng chuẩn cơ chế Spring Profiles:
+  Spring Boot tự động nạp file application-{profile}.properties khi profile tương
+  ứng đang active. Với spring.profiles.active=local, file application-local.properties
+  được đóng gói vào cấu hình; chỉ cần đổi thành cloud (hoặc đặt biến môi trường
+  SPRING_PROFILES_ACTIVE=cloud) là hệ thống chuyển sang dùng OpenRouter/Gemini
+  mà không phải sửa bất kỳ dòng mã nguồn Java nào.
+
+- Tính đóng gói (Encapsulation) cao:
+  Cấu hình của từng môi trường nằm trong file riêng, không lẫn vào nhau; tránh
+  rò rỉ API key, dễ review và dễ kiểm soát.
+
+- Dễ bảo trì (Maintainability):
+  Muốn thêm môi trường mới (VD: staging) chỉ cần tạo thêm file
+  application-staging.properties, không đụng vào cấu hình cũ, không lo conflict bean.
+
+- Bổ sung tốt nhất: không nên hardcode spring.profiles.active trong
+  application.properties mà nên set qua biến môi trường SPRING_PROFILES_ACTIVE
+  để cùng một artifact (JAR) chạy được ở mọi môi trường khi deploy.
+
+2. NHƯỢC ĐIỂM / LỖI CỦA PHƯƠNG ÁN A
+
+- Không đúng tinh thần Profile: toàn bộ cấu hình của 2 môi trường gộp chung một
+  file, spring.profiles.active không tạo được sự tách biệt nào.
+
+- Nguy cơ conflict bean ChatModel: vì cả bộ property của Ollama lẫn OpenAI đều tồn
+  tại cùng lúc, Spring AI Auto-Configuration sẽ dựng bean ChatModel cho CẢ HAI
+  provider -> lỗi inject không rõ ràng, phải phụ thuộc vào @Qualifier hoặc
+  spring.ai.model.chat.
+
+- Không linh hoạt khi triển khai: chạy local vẫn bắt buộc biến OPENROUTER_API_KEY
+  phải tồn tại trong môi trường (nếu không sẽ fail khi bind); ngược lại khi lên
+  Production vẫn giữ cấu hình Ollama không cần thiết.
+
+- Khó bảo trì, dễ rò rỉ key do gộp chung một file.
+
+3. LỖI KỸ THUẬT CỦA PHƯƠNG ÁN C
+
+- Key tự chế không nằm trong chuẩn Spring AI:
+  spring.ai.active-model-type KHÔNG tồn tại. Chuẩn để chọn model mặc định là
+  spring.ai.model.chat (giá trị ollama/openai/...), không phải key "tự đặt".
+
+- Sai key URL:
+  Key đúng phải là spring.ai.ollama.base-url và spring.ai.openai.base-url.
+  Key spring.ai.ollama.url / spring.ai.openai.url KHÔNG được Auto-Configuration
+  bind -> bị bỏ qua âm thầm.
+
+- Hậu quả:
+  + Ollama sẽ dùng default localhost:11434 (có thể vô tình chạy đúng).
+  + OpenAI sẽ trỏ tới api.openai.com (default) thay vì OpenRouter -> chạy SAI nơi
+    gọi Gemini, thậm chí fail vì thiếu api-key và model.
+
+- Không sử dụng Spring Profiles: muốn đổi môi trường phải sửa ngay trong file
+  cấu hình, không đóng gói, kém bảo trì -> không đáp ứng yêu cầu đề bài.
+
+KẾT LUẬN
+
+Chọn phương án B: đúng chuẩn Spring Profiles, đóng gói theo từng môi trường,
+đổi môi trường chỉ bằng properties / biến môi trường - đáp ứng đúng yêu cầu
+"chuyển đổi linh hoạt mà không sửa mã nguồn Java".
